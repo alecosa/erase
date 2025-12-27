@@ -1,3 +1,3 @@
 # ERASE
 
-Herramienta diseñada como apoyo en la sanitizacion de medios de almacenamiento
+Herramienta diseñada como apoyo en la sanitización de medios de almacenamiento
