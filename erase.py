@@ -246,31 +246,39 @@ def cifrar_archivo_aes_gcm_inplace(path):
 
 def wipe_physical_drive_aes_gcm(path, size, chunk_size=1024*1024):
     # Cifra el disco físico en el sitio (in-place)
-    key = os.urandom(32)
-    nonce = os.urandom(12)
+    # Rotamos claves cada 1GB para evitar "Exceeded maximum encrypted byte limit" de AES-GCM
+    ROTATE_LIMIT = 1 * 1024 * 1024 * 1024 # 1 GB
     backend = default_backend()
-    
-    # Para disco físico, solo ciframos los chunks en un bucle simple
-    # No guardamos cabecera ni tag porque es borrado destructivo
-    encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=backend).encryptor()
     
     # Importante: buffering=0 para evitar Errno 22 (Invalid argument) en discos físicos
     with open(path, "rb+", buffering=0) as f:
-        # Optimización: En lugar de Leer-Cifrar-Escribir (que falla por alineación/seek en Windows Raw),
-        # Generamos el Keystream de AES-GCM (cifrando ceros) y sobrescribimos.
-        # Esto es criptográficamente seguro (sobrescribe con pseudo-aleatorio de alta calidad)
-        # y elimina las operaciones de lectura y seek que causan Errno 22.
-        
         f.seek(0) # Asegurar inicio
         zeros = b'\x00' * chunk_size
         offset = 0
+        bytes_processed_since_rotate = 0
+
+        # Inicializar primer encryptor
+        key = os.urandom(32)
+        nonce = os.urandom(12)
+        encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=backend).encryptor()
         
         while offset < size:
+            # Verificar rotación
+            if bytes_processed_since_rotate >= ROTATE_LIMIT:
+                 key = os.urandom(32)
+                 nonce = os.urandom(12)
+                 encryptor = Cipher(algorithms.AES(key), modes.GCM(nonce), backend=backend).encryptor()
+                 bytes_processed_since_rotate = 0
+            
             # Calcular cuánto falta
             remaining = size - offset
             if remaining < chunk_size:
                 # Último chunk más pequeño
                 chunk_data = b'\x00' * remaining
+                if bytes_processed_since_rotate == 0:
+                     # Si acabamos de rotar, necesitamos una nueva instancia
+                     # (aunque en teoría el check de rotate ya lo hizo)
+                     pass
                 ct = encryptor.update(chunk_data)
                 f.write(ct)
                 offset += remaining
@@ -280,8 +288,7 @@ def wipe_physical_drive_aes_gcm(path, size, chunk_size=1024*1024):
             ct = encryptor.update(zeros)
             f.write(ct)
             offset += chunk_size
-    
-    # No llamamos finalize() para tag porque no lo guardamos.
+            bytes_processed_since_rotate += chunk_size
 
 def wipe_critical_sectors(path, total_size):
     """
